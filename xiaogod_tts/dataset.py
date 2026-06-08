@@ -15,7 +15,6 @@ from .text import Vocabulary
 class TTSItem:
     wav_path: str
     text: str
-    speaker: str
 
 
 def read_metadata(path: str | Path) -> list[TTSItem]:
@@ -30,15 +29,10 @@ def read_metadata(path: str | Path) -> list[TTSItem]:
             if not Path(wav_path).is_absolute():
                 cwd_path = Path(wav_path)
                 wav_path = str(cwd_path.resolve() if cwd_path.exists() else (base / wav_path).resolve())
-            speaker = row[2].strip() if len(row) >= 3 and row[2].strip() else "default"
-            items.append(TTSItem(wav_path=wav_path, text=row[1].strip(), speaker=speaker))
+            items.append(TTSItem(wav_path=wav_path, text=row[1].strip()))
     if not items:
         raise ValueError(f"No valid rows found in metadata: {path}")
     return items
-
-
-def build_speakers(items: list[TTSItem]) -> dict[str, int]:
-    return {name: idx for idx, name in enumerate(sorted({item.speaker for item in items}))}
 
 
 def make_uniform_durations(token_count: int, mel_len: int) -> torch.Tensor:
@@ -57,10 +51,9 @@ def make_uniform_durations(token_count: int, mel_len: int) -> torch.Tensor:
 
 
 class TTSDataset(Dataset):
-    def __init__(self, items: list[TTSItem], vocab: Vocabulary, speakers: dict[str, int], audio_cfg: AudioConfig):
+    def __init__(self, items: list[TTSItem], vocab: Vocabulary, audio_cfg: AudioConfig):
         self.items = items
         self.vocab = vocab
-        self.speakers = speakers
         self.audio_cfg = audio_cfg
 
     def __len__(self) -> int:
@@ -76,7 +69,6 @@ class TTSDataset(Dataset):
             "tokens": tokens,
             "mel": mel,
             "durations": durations,
-            "speaker": torch.tensor(self.speakers[item.speaker], dtype=torch.long),
             "text": item.text,
         }
 
@@ -87,12 +79,10 @@ def collate_batch(batch: list[dict], pad_id: int) -> dict:
     mels = pad_sequence([b["mel"] for b in batch], batch_first=True, padding_value=0.0)
     token_lens = torch.tensor([b["tokens"].numel() for b in batch], dtype=torch.long)
     mel_lens = torch.tensor([b["mel"].size(0) for b in batch], dtype=torch.long)
-    speakers = torch.stack([b["speaker"] for b in batch])
     return {
         "tokens": tokens,
         "durations": durations,
         "mels": mels,
         "token_lens": token_lens,
         "mel_lens": mel_lens,
-        "speakers": speakers,
     }

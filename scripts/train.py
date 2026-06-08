@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from xiaogod_tts.config import AudioConfig, ModelConfig, TrainConfig, to_dict
-from xiaogod_tts.dataset import TTSDataset, build_speakers, collate_batch, read_metadata
+from xiaogod_tts.dataset import TTSDataset, collate_batch, read_metadata
 from xiaogod_tts.logging import setup_terminal_log
 from xiaogod_tts.model import XiaoGodTTS, lengths_to_mask
 from xiaogod_tts.text import Vocabulary
@@ -49,15 +49,13 @@ def main() -> None:
     items = read_metadata(args.metadata)
     vocab = Vocabulary()
     vocab.build([item.text for item in items])
-    speakers = build_speakers(items)
     audio_cfg = AudioConfig()
-    model_cfg = ModelConfig(vocab_size=len(vocab), speaker_count=len(speakers))
+    model_cfg = ModelConfig(vocab_size=len(vocab))
 
     vocab.save(out / "vocab.json")
-    (out / "speakers.json").write_text(json.dumps(speakers, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "config.json").write_text(json.dumps(to_dict(audio_cfg, model_cfg, train_cfg), indent=2), encoding="utf-8")
 
-    dataset = TTSDataset(items, vocab, speakers, audio_cfg)
+    dataset = TTSDataset(items, vocab, audio_cfg)
     loader = DataLoader(
         dataset,
         batch_size=train_cfg.batch_size,
@@ -74,13 +72,12 @@ def main() -> None:
         bar = tqdm(loader, desc=f"epoch {epoch}/{train_cfg.epochs}")
         for batch in bar:
             tokens = batch["tokens"].to(args.device)
-            speakers_t = batch["speakers"].to(args.device)
             durations = batch["durations"].to(args.device)
             mels = batch["mels"].to(args.device)
             mel_lens = batch["mel_lens"].to(args.device)
             token_lens = batch["token_lens"].to(args.device)
 
-            out_batch = model(tokens, speakers_t, durations)
+            out_batch = model(tokens, durations)
             mel_loss = masked_l1(out_batch["mel"], mels, mel_lens)
             log_target = torch.log(durations.float().clamp_min(1.0))
             token_mask = ~lengths_to_mask(token_lens, tokens.size(1))
@@ -98,7 +95,6 @@ def main() -> None:
             "model": model.state_dict(),
             "config": to_dict(audio_cfg, model_cfg, train_cfg),
             "vocab": vocab.token_to_id,
-            "speakers": speakers,
             "epoch": epoch,
         }
         torch.save(ckpt, out / "latest.pt")

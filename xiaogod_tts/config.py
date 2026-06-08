@@ -16,7 +16,6 @@ class AudioConfig:
 @dataclass
 class ModelConfig:
     vocab_size: int
-    speaker_count: int
     hidden: int = 256
     layers: int = 4
     heads: int = 4

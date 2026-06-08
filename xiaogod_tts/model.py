@@ -48,7 +48,6 @@ class XiaoGodTTS(nn.Module):
         self.cfg = cfg
         self.pad_id = pad_id
         self.token_emb = nn.Embedding(cfg.vocab_size, cfg.hidden, padding_idx=pad_id)
-        self.speaker_emb = nn.Embedding(cfg.speaker_count, cfg.hidden)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=cfg.hidden,
             nhead=cfg.heads,
@@ -70,14 +69,13 @@ class XiaoGodTTS(nn.Module):
         self.decoder = nn.TransformerEncoder(dec_layer, num_layers=cfg.layers)
         self.mel_proj = nn.Linear(cfg.hidden, n_mels)
 
-    def encode(self, tokens: torch.Tensor, speakers: torch.Tensor) -> torch.Tensor:
+    def encode(self, tokens: torch.Tensor) -> torch.Tensor:
         mask = tokens.eq(self.pad_id)
         x = self.token_emb(tokens)
-        x = x + self.speaker_emb(speakers).unsqueeze(1)
         return self.encoder(x, src_key_padding_mask=mask)
 
-    def forward(self, tokens: torch.Tensor, speakers: torch.Tensor, durations: torch.Tensor) -> dict:
-        enc = self.encode(tokens, speakers)
+    def forward(self, tokens: torch.Tensor, durations: torch.Tensor) -> dict:
+        enc = self.encode(tokens)
         log_dur = self.duration(enc)
         expanded, mel_lens = length_regulate(enc, durations)
         mel_mask = lengths_to_mask(mel_lens, expanded.size(1))
@@ -86,23 +84,11 @@ class XiaoGodTTS(nn.Module):
         return {"mel": mel, "log_duration": log_dur, "mel_lens": mel_lens}
 
     @torch.no_grad()
-    def infer(self, tokens: torch.Tensor, speakers: torch.Tensor, speed: float = 1.0) -> torch.Tensor:
-        enc = self.encode(tokens, speakers)
+    def infer(self, tokens: torch.Tensor, speed: float = 1.0) -> torch.Tensor:
+        enc = self.encode(tokens)
         log_dur = self.duration(enc)
         dur = torch.round(torch.exp(log_dur).clamp(1, self.cfg.max_duration) / max(speed, 0.2)).long()
         expanded, mel_lens = length_regulate(enc, dur)
         mel_mask = lengths_to_mask(mel_lens, expanded.size(1))
         dec = self.decoder(expanded, src_key_padding_mask=mel_mask)
         return self.mel_proj(dec)[0, : mel_lens[0]]
-
-
-def expand_speaker_embedding(model: XiaoGodTTS, new_count: int) -> None:
-    old = model.speaker_emb
-    if new_count <= old.num_embeddings:
-        return
-    new_emb = nn.Embedding(new_count, old.embedding_dim).to(old.weight.device)
-    with torch.no_grad():
-        new_emb.weight[: old.num_embeddings].copy_(old.weight)
-        mean = old.weight.mean(dim=0, keepdim=True)
-        new_emb.weight[old.num_embeddings :].copy_(mean)
-    model.speaker_emb = new_emb
